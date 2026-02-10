@@ -47,6 +47,7 @@ async function loadCensusData(filters = {}) {
         
         const params = new URLSearchParams();
         if (filters.zip_code) params.append('zip_code', filters.zip_code);
+        if (filters.city) params.append('city', filters.city);
         if (filters.min_income) params.append('min_income', filters.min_income);
         if (filters.max_income) params.append('max_income', filters.max_income);
         if (filters.min_population) params.append('min_population', filters.min_population);
@@ -133,7 +134,8 @@ async function updateMap() {
     // Update heatmap if we have data
     if (heatmapData.length > 0) {
         updateHeatmap(heatmapData, activeLayer);
-        if (currentData.length > 1) {
+        // Zoom for non-city views (city zoom is done in searchByCity via geocode)
+        if (currentData.length > 1 && !currentFilters.city) {
             map.fitBounds(bounds);
         }
     }
@@ -967,6 +969,14 @@ function doInit() {
     const schoolDistrictsEl = document.getElementById('layer-school-districts');
     if (schoolDistrictsEl) schoolDistrictsEl.addEventListener('change', onSchoolDistrictsToggle);
     
+    // Search by city
+    document.getElementById('search-city-btn').addEventListener('click', searchByCity);
+    document.getElementById('search-city').addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            searchByCity();
+        }
+    });
+    
     // Search and zoom to zip code
     document.getElementById('search-zoom-btn').addEventListener('click', searchAndZoom);
     document.getElementById('search-zip').addEventListener('keypress', (e) => {
@@ -1086,6 +1096,59 @@ if (document.readyState === 'loading') {
     runWhenReady();
 }
 
+// Search by city - filter map to show only zip codes in that city
+async function searchByCity() {
+    const cityInput = document.getElementById('search-city');
+    const city = cityInput && cityInput.value.trim();
+    
+    if (!city) {
+        alert('Please enter a city name');
+        return;
+    }
+    
+    try {
+        showLoading(true);
+        currentZipCode = null;
+        currentCensusRecord = null;
+        currentAddress = null;
+        currentLocation = null;
+        updateLegend();
+        // Clear zip and address fields - city search is separate from Search & Zoom
+        const zipEl = document.getElementById('search-zip');
+        const addrEl = document.getElementById('search-address');
+        if (zipEl) zipEl.value = '';
+        if (addrEl) addrEl.value = '';
+        // Auto-enable zip boundaries so city zips are highlighted
+        const boundariesCb = document.getElementById('layer-boundaries');
+        if (boundariesCb) boundariesCb.checked = true;
+        await loadCensusData({ city: city });
+        // Zoom to city using geocode (like address search) - avoids wrong center when multiple cities share the name
+        const geocoder = new google.maps.Geocoder();
+        const geocodeResult = await new Promise((resolve) => {
+            geocoder.geocode(
+                { address: `${city}, USA`, componentRestrictions: { country: 'US' } },
+                (results, status) => {
+                    if (status === 'OK' && results && results.length > 0) resolve(results[0]);
+                    else resolve(null);
+                }
+            );
+        });
+        if (geocodeResult) {
+            const loc = geocodeResult.geometry.location;
+            const vp = geocodeResult.geometry.viewport;
+            const b = geocodeResult.geometry.bounds;
+            if (b) map.fitBounds(b, { top: 80, right: 80, bottom: 80, left: 80 });
+            else if (vp) map.fitBounds(vp, { top: 80, right: 80, bottom: 80, left: 80 });
+            else { map.setCenter(loc); map.setZoom(11); }
+        }
+    } catch (error) {
+        console.error('Error searching by city:', error);
+        alert('Error searching by city. Please try again.');
+    } finally {
+        showLoading(false);
+    }
+}
+
 // Search and zoom to specific zip code
 async function searchAndZoom() {
     const zipCode = document.getElementById('search-zip').value.trim();
@@ -1103,6 +1166,9 @@ async function searchAndZoom() {
     
     try {
         showLoading(true);
+        // Clear city field - zip/address search is separate from Search by City
+        const cityEl = document.getElementById('search-city');
+        if (cityEl) cityEl.value = '';
         
         // First, try to geocode the zip code (this works even if not in database)
         let geocodeResult = await geocodeZipCodeFull(zipCode);
@@ -1201,6 +1267,9 @@ async function searchAndZoom() {
         currentAddress = zipCode;  // Use zip code as address if no full address
         currentLocation = { lat: location.lat(), lng: location.lng() };
         currentZipCode = zipCode;
+        
+        // Load ONLY this zip (standalone from city search - no surrounding parcels)
+        await loadCensusData({ zip_code: zipCode });
         
         // Zoom to the location
         if (bounds) {
@@ -1302,6 +1371,9 @@ async function searchByAddress() {
     
     try {
         showLoading(true);
+        // Clear city field - zip/address search is separate from Search by City
+        const cityEl = document.getElementById('search-city');
+        if (cityEl) cityEl.value = '';
         
         // Geocode the address
         const geocoder = new google.maps.Geocoder();
@@ -1379,7 +1451,9 @@ async function searchByAddress() {
         currentLocation = { lat: location.lat(), lng: location.lng() };
         currentZipCode = zipCode;
         
-        // Now use the same searchAndZoom logic with the found zip code
+        // Load ONLY this zip (standalone from city search - no surrounding parcels)
+        await loadCensusData({ zip_code: zipCode });
+        
         // Zoom to the location
         if (bounds) {
             map.fitBounds(bounds);

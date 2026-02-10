@@ -44,6 +44,7 @@ def get_census_data():
 
     try:
         zip_code = request.args.get('zip_code')
+        city = request.args.get('city')
         min_income = request.args.get('min_income', type=float)
         max_income = request.args.get('max_income', type=float)
         min_population = request.args.get('min_population', type=int)
@@ -51,12 +52,15 @@ def get_census_data():
         limit = request.args.get('limit', type=int, default=1000)
         offset = request.args.get('offset', type=int, default=0)
 
-        # Build WHERE and params (no ORM - avoids census_data.city)
+        # Build WHERE and params
         where_parts = []
         params = {}
         if zip_code:
             where_parts.append("zip_code = :zip_code")
             params["zip_code"] = zip_code
+        if city:
+            where_parts.append("LOWER(TRIM(COALESCE(city, ''))) = LOWER(TRIM(:city))")
+            params["city"] = city.strip()
         if min_income:
             where_parts.append("average_household_income >= :min_income")
             params["min_income"] = min_income

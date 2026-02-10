@@ -7,6 +7,7 @@ Usage:
   python scripts/fetch_city_for_zips.py --limit 50   # first 50 (test)
   python scripts/fetch_city_for_zips.py --dry-run   # only fetch & cache, no DB update
   python scripts/fetch_city_for_zips.py --delay 0.5  # seconds between requests (default 0.25)
+  python scripts/fetch_city_for_zips.py --missing-only  # only zips that don't have a city yet
 
 Requires: run migrate_add_city_to_census.py first so census_data has a 'city' column.
 """
@@ -19,6 +20,7 @@ import requests
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from sqlalchemy import or_, func
 from backend.database import SessionLocal
 from backend.models import CensusData
 
@@ -82,6 +84,7 @@ def main():
     parser.add_argument("--limit", type=int, default=None, help="Max number of zips to process (default: all)")
     parser.add_argument("--dry-run", action="store_true", help="Only fetch and cache; do not update DB")
     parser.add_argument("--delay", type=float, default=0.25, help="Seconds between API requests (default: 0.25)")
+    parser.add_argument("--missing-only", action="store_true", help="Only process zips that don't have a city yet")
     args = parser.parse_args()
 
     cache = load_cache()
@@ -89,7 +92,10 @@ def main():
 
     db = SessionLocal()
     try:
-        rows = db.query(CensusData.zip_code).distinct().order_by(CensusData.zip_code).all()
+        q = db.query(CensusData.zip_code).distinct().order_by(CensusData.zip_code)
+        if args.missing_only:
+            q = q.filter(or_(CensusData.city.is_(None), func.trim(func.coalesce(CensusData.city, '')) == ''))
+        rows = q.all()
         zips = [r[0] for r in rows if r[0]]
     finally:
         db.close()
@@ -98,7 +104,8 @@ def main():
         zips = zips[: args.limit]
         print(f"Processing first {args.limit} zips (--limit)")
     else:
-        print(f"Processing {len(zips)} zip codes from census_data")
+        mode = "missing-only (no city yet)" if args.missing_only else "all"
+        print(f"Processing {len(zips)} zip codes from census_data ({mode})")
 
     if args.dry_run:
         print("DRY RUN: will only fetch and cache, no DB updates")
