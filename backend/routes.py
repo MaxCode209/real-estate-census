@@ -49,6 +49,8 @@ def get_census_data():
         max_income = request.args.get('max_income', type=float)
         min_population = request.args.get('min_population', type=int)
         max_population = request.args.get('max_population', type=int)
+        min_age = request.args.get('min_age', type=float)
+        max_age = request.args.get('max_age', type=float)
         limit = request.args.get('limit', type=int, default=1000)
         offset = request.args.get('offset', type=int, default=0)
 
@@ -73,6 +75,12 @@ def get_census_data():
         if max_population:
             where_parts.append("population <= :max_population")
             params["max_population"] = max_population
+        if min_age is not None:
+            where_parts.append("median_age >= :min_age")
+            params["min_age"] = min_age
+        if max_age is not None:
+            where_parts.append("median_age <= :max_age")
+            params["max_age"] = max_age
         where_sql = " AND ".join(where_parts) if where_parts else "1=1"
 
         # Count with raw SQL (never selects city)

@@ -88,6 +88,12 @@ header p {
     cursor: pointer;
 }
 
+.data-layer-filters {
+    margin-top: 1rem;
+    padding-bottom: 1rem;
+    border-bottom: 1px solid #eee;
+}
+
 .search-section {
     margin-top: 1rem;
     padding-bottom: 1rem;

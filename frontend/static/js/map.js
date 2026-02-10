@@ -52,6 +52,8 @@ async function loadCensusData(filters = {}) {
         if (filters.max_income) params.append('max_income', filters.max_income);
         if (filters.min_population) params.append('min_population', filters.min_population);
         if (filters.max_population) params.append('max_population', filters.max_population);
+        if (filters.min_age != null && filters.min_age !== '') params.append('min_age', filters.min_age);
+        if (filters.max_age != null && filters.max_age !== '') params.append('max_age', filters.max_age);
         params.append('limit', '5000'); // Adjust as needed
         
         const response = await fetch(`${API_BASE_URL}/census-data?${params}`);
@@ -73,6 +75,28 @@ async function loadCensusData(filters = {}) {
     } finally {
         showLoading(false);
     }
+}
+
+// Apply data layer filters (population min, MHI min, median age min)
+function applyDataLayerFilters() {
+    const filters = { ...currentFilters };
+    const popVal = document.getElementById('filter-pop-min')?.value?.trim();
+    const mhiVal = document.getElementById('filter-mhi-min')?.value?.trim();
+    if (popVal) filters.min_population = parseInt(popVal, 10);
+    if (mhiVal) filters.min_income = parseFloat(mhiVal);
+    loadCensusData(filters);
+}
+
+// Clear data layer filter inputs and reload without them
+function clearDataLayerFilters() {
+    const popEl = document.getElementById('filter-pop-min');
+    const mhiEl = document.getElementById('filter-mhi-min');
+    if (popEl) popEl.value = '';
+    if (mhiEl) mhiEl.value = '';
+    const filters = {};
+    if (currentFilters.city) filters.city = currentFilters.city;
+    if (currentFilters.zip_code) filters.zip_code = currentFilters.zip_code;
+    loadCensusData(filters);
 }
 
 // Update map with current data and selected layer
@@ -970,6 +994,8 @@ function doInit() {
     if (schoolDistrictsEl) schoolDistrictsEl.addEventListener('change', onSchoolDistrictsToggle);
     
     // Search by city
+    document.getElementById('apply-filters-btn').addEventListener('click', applyDataLayerFilters);
+    document.getElementById('clear-filters-btn').addEventListener('click', clearDataLayerFilters);
     document.getElementById('search-city-btn').addEventListener('click', searchByCity);
     document.getElementById('search-city').addEventListener('keypress', (e) => {
         if (e.key === 'Enter') {
