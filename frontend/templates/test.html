@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Connection Test</title>
+</head>
+<body>
+    <h1>Connection Test</h1>
+    <div id="status">Testing...</div>
+    <script>
+        // Test API connection
+        fetch('/api/census-data')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('status').innerHTML = 
+                    '✓ API Working! Found ' + data.total + ' records';
+            })
+            .catch(error => {
+                document.getElementById('status').innerHTML = 
+                    '✗ API Error: ' + error.message;
+            });
+    </script>
+</body>
+</html>
+

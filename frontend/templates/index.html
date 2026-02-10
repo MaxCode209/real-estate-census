@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real Estate Site Selection - Census Data Map</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://maps.googleapis.com/maps/api/js?key={{ google_maps_api_key }}&libraries=visualization,drawing,geometry,places"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Real Estate Site Selection Tool</h1>
+            <p>Census Data Visualization by Zip Code</p>
+        </header>
+        
+        <div class="main-content">
+            <aside class="control-panel">
+                <h2>Data Layers</h2>
+                
+                <div class="layer-controls">
+                    <label class="layer-toggle">
+                        <input type="checkbox" id="layer-population" checked>
+                        <span>Population</span>
+                    </label>
+                    
+                    <label class="layer-toggle">
+                        <input type="checkbox" id="layer-income" checked>
+                        <span>Median Household Income (MHI)</span>
+                    </label>
+                    
+                    <label class="layer-toggle">
+                        <input type="checkbox" id="layer-age" checked>
+                        <span>Median Age</span>
+                    </label>
+                    
+                    <label class="layer-toggle">
+                        <input type="checkbox" id="layer-boundaries" checked>
+                        <span>Zip Code Boundaries</span>
+                    </label>
+                    <label class="layer-toggle">
+                        <input type="checkbox" id="layer-school-districts">
+                        <span>School Districts (zip)</span>
+                    </label>
+                    <div id="school-districts-status" class="school-districts-status" style="font-size:0.85em;color:#666;margin-top:2px;min-height:1.2em;"></div>
+                </div>
+                
+                <div class="search-section">
+                    <h3>Search & Zoom</h3>
+                    <div class="filter-group">
+                        <label for="search-zip">Search Zip Code:</label>
+                        <div style="display: flex; gap: 5px;">
+                            <input type="text" id="search-zip" placeholder="e.g., 10001" style="flex: 1;">
+                            <button id="search-zoom-btn" class="btn btn-primary" style="width: auto; padding: 0.5rem 1rem;">Go</button>
+                        </div>
+                    </div>
+                    <div class="filter-group" style="margin-top: 10px;">
+                        <label for="search-address">Search Address:</label>
+                        <div style="display: flex; gap: 5px;">
+                            <input type="text" id="search-address" placeholder="e.g., 123 Main St, New York, NY" style="flex: 1;">
+                            <button id="search-address-btn" class="btn btn-primary" style="width: auto; padding: 0.5rem 1rem;">Go</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="actions-section">
+                    <h3>Actions</h3>
+                    <button id="fetch-data" class="btn btn-primary">Fetch Census Data</button>
+                    <button id="export-sheets" class="btn btn-success">Download Report (Word/PDF)</button>
+                    <button id="refresh-map" class="btn btn-secondary">Refresh Map</button>
+                </div>
+                
+                <div class="info-section">
+                    <h3>Info</h3>
+                    <div id="data-stats">
+                        <p>Records loaded: <span id="record-count">0</span></p>
+                    </div>
+                </div>
+                
+                <div class="school-scores-section" id="school-scores-section" style="display: none;">
+                    <h3>School Scores</h3>
+                    <div id="school-scores-content">
+                        <div class="school-score-item">
+                            <strong>Elementary:</strong> <span id="elementary-score">-</span>/10
+                            <div class="school-name" id="elementary-name"></div>
+                        </div>
+                        <div class="school-score-item">
+                            <strong>Middle:</strong> <span id="middle-score">-</span>/10
+                            <div class="school-name" id="middle-name"></div>
+                        </div>
+                        <div class="school-score-item">
+                            <strong>High:</strong> <span id="high-score">-</span>/10
+                            <div class="school-name" id="high-name"></div>
+                        </div>
+                        <div class="school-score-item blended-score">
+                            <strong>Blended Score:</strong> <span id="blended-score">-</span>/10
+                        </div>
+                    </div>
+                </div>
+            </aside>
+            
+            <main class="map-container">
+                <div id="map"></div>
+                <div id="map-legend" class="legend"></div>
+            </main>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/map.js') }}"></script>
+</body>
+</html>
+
