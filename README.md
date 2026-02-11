@@ -97,3 +97,24 @@ python app.py
 - `POST /api/census-data` - Add/update census data
 - `GET /api/export/sheets` - Export data to Google Sheets
 
+## NC Employment Data Import
+
+We ingest the NC Department of Commerce “Top Employers” dataset so each county/zip can be scored against employment concentration. See `docs/EMPLOYMENT_DATA.md` for the column glossary and normalization rules.
+
+1. **Apply the Supabase migration**
+   ```bash
+   supabase db push   # runs supabase/migrations/20260211133000_create_county_employers.sql
+   ```
+
+2. **Import/refresh the dataset**
+   ```bash
+   python scripts/import_county_employers.py \
+     --csv-path "c:\Users\Max\OneDrive - Edgehill Real Estate Capital\Desktop\Data Project Datasets\NC_Top_Employers_with_Salaries.csv"
+   ```
+
+   Useful flags:
+   - `--dry-run` – parse and log counts without writing to the database
+   - `--limit 50` – import the first N rows (testing)
+
+The importer reads `data/nc_county_fips.csv` (generated from the Census national county reference) to translate county names into the official 5-digit FIPS codes automatically.
+

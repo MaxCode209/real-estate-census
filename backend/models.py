@@ -1,7 +1,8 @@
 """Database models for census data."""
-from sqlalchemy import Column, String, Float, Integer, DateTime, Index, Text, ForeignKey
+from sqlalchemy import Column, String, Float, Integer, DateTime, Index, Text, ForeignKey, Numeric, UniqueConstraint, text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
 from backend.database import Base
 
 class CensusData(Base):
@@ -11,7 +12,6 @@ class CensusData(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     zip_code = Column(String(10), nullable=False, unique=True, index=True)  # Unique constraint prevents duplicates
-    state = Column(String(2), nullable=True)   # kept for schema; not populated (avoids DDL timeout)
     county = Column(String(100), nullable=True)  # kept for schema; not populated (avoids DDL timeout)
 
     # Census data fields (2024). average_household_income = Census B19013 (Median HHI); label in UI as "MHI"
@@ -39,7 +39,6 @@ class CensusData(Base):
         return {
             'id': self.id,
             'zip_code': self.zip_code,
-            'state': self.state,
             'county': self.county,
             'population': self.population,
             'median_age': self.median_age,
@@ -155,6 +154,47 @@ class AttendanceZone(Base):
             'zone_boundary': json.loads(self.zone_boundary) if self.zone_boundary else None,
             'data_year': self.data_year,
             'source': self.source,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class CountyEmployer(Base):
+    """Top employers per county (imported from NC statewide dataset)."""
+
+    __tablename__ = 'county_employers'
+    __table_args__ = (
+        UniqueConstraint('county_name', 'year', 'company_name', 'rank', name='county_employers_unique'),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()"))
+    county_name = Column(String(255), nullable=False, index=True)
+    state_code = Column(String(2), nullable=False, default='NC')
+    county_fips = Column(String(5), nullable=True, index=True)
+    year = Column(Integer, nullable=False, default=2024)
+    company_name = Column(String(255), nullable=False)
+    industry = Column(String(255), nullable=True)
+    sector_class = Column(String(32), nullable=False)  # 'private_sector' or 'public_sector'
+    employment_range = Column(String(32), nullable=False)
+    rank = Column(Integer, nullable=False)
+    avg_salary = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self):
+        """Return a serializable representation for APIs/scripts."""
+        return {
+            'id': str(self.id) if self.id else None,
+            'county_name': self.county_name,
+            'state_code': self.state_code,
+            'county_fips': self.county_fips,
+            'year': self.year,
+            'company_name': self.company_name,
+            'industry': self.industry,
+            'sector_class': self.sector_class,
+            'employment_range': self.employment_range,
+            'rank': self.rank,
+            'avg_salary': self.avg_salary,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
         }

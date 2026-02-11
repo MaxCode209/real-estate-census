@@ -1,6 +1,8 @@
 """
-Script to add state and county to existing census_data records.
-Uses Census API geography to get state/county for each zip code.
+Legacy helper that attempted to backfill `state` on census_data.
+
+The `state` column has since been removed, so this script is kept only for
+historical reference.
 """
 import sys
 import os
@@ -66,39 +68,8 @@ def get_state_county_for_zip(zip_code):
         return None, None
 
 def update_census_data_with_state_county():
-    """Update all census_data records with state and county."""
-    db = SessionLocal()
-    
-    try:
-        # Get all records missing state or county
-        records = db.query(CensusData).filter(
-            (CensusData.state.is_(None)) | (CensusData.county.is_(None))
-        ).all()
-        
-        print(f"Found {len(records)} records missing state/county")
-        
-        updated = 0
-        for record in records:
-            state, county = get_state_county_for_zip(record.zip_code)
-            
-            if state:
-                record.state = state
-                updated += 1
-            
-            if county:
-                # Would need county FIPS to name lookup
-                # For now, store FIPS code
-                record.county = county
-            
-            if updated % 100 == 0:
-                db.commit()
-                print(f"Updated {updated} records...")
-        
-        db.commit()
-        print(f"Completed! Updated {updated} records with state/county")
-        
-    finally:
-        db.close()
+    """No-op placeholder since census_data.state has been dropped."""
+    raise SystemExit("census_data.state column has been removed; this script is no longer applicable.")
 
 if __name__ == '__main__':
     update_census_data_with_state_county()

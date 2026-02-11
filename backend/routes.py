@@ -8,12 +8,12 @@ from backend.models import CensusData, SchoolData, AttendanceZone
 
 # Columns that exist in census_data table (no city until added in Supabase)
 _CENSUS_LOAD_COLUMNS = (
-    CensusData.id, CensusData.zip_code, CensusData.state, CensusData.county,
+    CensusData.id, CensusData.zip_code, CensusData.county,
     CensusData.population, CensusData.median_age, CensusData.average_household_income,
     CensusData.data_year, CensusData.created_at, CensusData.updated_at,
 )
 # Explicit column list for raw SQL (never includes city)
-_CENSUS_SQL_COLS = "id, zip_code, state, county, population, median_age, average_household_income, data_year, created_at, updated_at"
+_CENSUS_SQL_COLS = "id, zip_code, county, population, median_age, average_household_income, data_year, created_at, updated_at"
 from backend.census_api import CensusAPIClient
 from backend.zone_utils import (
     point_in_polygon,
@@ -97,7 +97,7 @@ def get_census_data():
         rows = db.execute(data_sql, params).fetchall()
 
         # Build response dicts (same shape as to_dict)
-        keys = ["id", "zip_code", "state", "county", "population", "median_age", "average_household_income", "data_year", "created_at", "updated_at"]
+        keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "data_year", "created_at", "updated_at"]
         data = [dict(zip(keys, row)) for row in rows]
         for row in data:
             if row.get("created_at"):
