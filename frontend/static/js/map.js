@@ -54,6 +54,7 @@ async function loadCensusData(filters = {}) {
         if (filters.max_population) params.append('max_population', filters.max_population);
         if (filters.min_age != null && filters.min_age !== '') params.append('min_age', filters.min_age);
         if (filters.max_age != null && filters.max_age !== '') params.append('max_age', filters.max_age);
+        if (filters.min_employment_rating != null && filters.min_employment_rating !== '' && !Number.isNaN(Number(filters.min_employment_rating))) params.append('min_employment_rating', filters.min_employment_rating);
         params.append('limit', '5000'); // Adjust as needed
         
         const response = await fetch(`${API_BASE_URL}/census-data?${params}`);
@@ -65,8 +66,11 @@ async function loadCensusData(filters = {}) {
         }
 
         currentData = result.data || [];
-        const total = currentData.length;
+        const total = result.total ?? currentData.length;
         updateRecordCount(total, total > MAX_ZIPS_FOR_MAP ? MAX_ZIPS_FOR_MAP : null);
+        if (currentData.length === 0 && filters.min_employment_rating != null && !Number.isNaN(Number(filters.min_employment_rating))) {
+            console.warn('No zips match filters. Local Employment Rating is only available for NC counties.');
+        }
         updateMap();
 
     } catch (error) {
@@ -77,13 +81,20 @@ async function loadCensusData(filters = {}) {
     }
 }
 
-// Apply data layer filters (population min, MHI min, median age min)
+// Apply data layer filters (population min, MHI min, employment rating min)
 function applyDataLayerFilters() {
     const filters = { ...currentFilters };
     const popVal = document.getElementById('filter-pop-min')?.value?.trim();
     const mhiVal = document.getElementById('filter-mhi-min')?.value?.trim();
+    const empVal = document.getElementById('filter-emp-min')?.value?.trim();
     if (popVal) filters.min_population = parseInt(popVal, 10);
     if (mhiVal) filters.min_income = parseFloat(mhiVal);
+    if (empVal) {
+        const empNum = parseFloat(empVal);
+        if (!Number.isNaN(empNum) && empNum >= 0 && empNum <= 10) {
+            filters.min_employment_rating = empNum;
+        }
+    }
     loadCensusData(filters);
 }
 
@@ -91,8 +102,10 @@ function applyDataLayerFilters() {
 function clearDataLayerFilters() {
     const popEl = document.getElementById('filter-pop-min');
     const mhiEl = document.getElementById('filter-mhi-min');
+    const empEl = document.getElementById('filter-emp-min');
     if (popEl) popEl.value = '';
     if (mhiEl) mhiEl.value = '';
+    if (empEl) empEl.value = '';
     const filters = {};
     if (currentFilters.city) filters.city = currentFilters.city;
     if (currentFilters.zip_code) filters.zip_code = currentFilters.zip_code;
@@ -136,7 +149,7 @@ async function updateMap() {
         const location = await geocodeZipCode(record.zip_code);
         if (location) {
             const value = getLayerValue(record, activeLayer);
-            if (value !== null && value !== undefined) {
+            if (value !== null && value !== undefined && (activeLayer !== 'employment' || value > 0)) {
                 heatmapData.push({
                     location: location,
                     weight: normalizeValue(value, activeLayer)
@@ -284,6 +297,8 @@ function getLayerValue(record, layer) {
             return record.average_household_income;
         case 'age':
             return record.median_age;
+        case 'employment':
+            return record.local_employment_rating;
         default:
             return null;
     }
@@ -354,6 +369,7 @@ function createInfoWindowContent(record) {
             <p style="margin: 5px 0;"><strong>Population:</strong> ${formatNumber(record.population)}</p>
             <p style="margin: 5px 0;"><strong>Median Age:</strong> ${record.median_age ? record.median_age.toFixed(1) : 'N/A'}</p>
             <p style="margin: 5px 0;"><strong>Median Household Income (MHI):</strong> ${record.average_household_income ? formatCurrency(record.average_household_income) : 'N/A'}</p>
+            <p style="margin: 5px 0;"><strong>Local Employment Rating:</strong> ${record.local_employment_rating != null ? (record.local_employment_rating + ' / 10') : 'N/A'}</p>
         </div>
     `;
 }
@@ -429,6 +445,7 @@ function updateLegend() {
     const pop = r.population != null ? formatNumber(r.population) : 'N/A';
     const age = r.median_age != null ? r.median_age.toFixed(1) + ' years' : 'N/A';
     const hhi = r.average_household_income != null ? formatCurrency(r.average_household_income) : 'N/A';
+    const empRating = r.local_employment_rating != null ? (r.local_employment_rating + ' / 10') : 'N/A';
 
     legend.innerHTML = `
         <h4>Demographics</h4>
@@ -436,6 +453,7 @@ function updateLegend() {
         <p class="legend-row"><strong>Population:</strong> ${pop}</p>
         <p class="legend-row"><strong>Median Age:</strong> ${age}</p>
         <p class="legend-row"><strong>Median HHI:</strong> ${hhi}</p>
+        <p class="legend-row"><strong>Local Employment Rating:</strong> ${empRating}</p>
     `;
 }
 
@@ -448,6 +466,8 @@ function formatValue(value, layer) {
             return formatCurrency(value);
         case 'age':
             return value.toFixed(1) + ' years';
+        case 'employment':
+            return value != null ? (value.toFixed(1) + ' / 10') : 'N/A';
         default:
             return value;
     }
@@ -989,6 +1009,7 @@ function doInit() {
     document.getElementById('layer-population').addEventListener('change', updateMap);
     document.getElementById('layer-income').addEventListener('change', updateMap);
     document.getElementById('layer-age').addEventListener('change', updateMap);
+    document.getElementById('layer-employment').addEventListener('change', updateMap);
     document.getElementById('layer-boundaries').addEventListener('change', updateMap);
     const schoolDistrictsEl = document.getElementById('layer-school-districts');
     if (schoolDistrictsEl) schoolDistrictsEl.addEventListener('change', onSchoolDistrictsToggle);

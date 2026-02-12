@@ -13,7 +13,7 @@ _CENSUS_LOAD_COLUMNS = (
     CensusData.data_year, CensusData.created_at, CensusData.updated_at,
 )
 # Explicit column list for raw SQL (never includes city)
-_CENSUS_SQL_COLS = "id, zip_code, county, population, median_age, average_household_income, data_year, created_at, updated_at"
+_CENSUS_SQL_COLS = "id, zip_code, county, population, median_age, average_household_income, local_employment_rating, data_year, created_at, updated_at"
 from backend.census_api import CensusAPIClient
 from backend.zone_utils import (
     point_in_polygon,
@@ -51,6 +51,7 @@ def get_census_data():
         max_population = request.args.get('max_population', type=int)
         min_age = request.args.get('min_age', type=float)
         max_age = request.args.get('max_age', type=float)
+        min_employment_rating = request.args.get('min_employment_rating', type=float)
         limit = request.args.get('limit', type=int, default=1000)
         offset = request.args.get('offset', type=int, default=0)
 
@@ -81,6 +82,9 @@ def get_census_data():
         if max_age is not None:
             where_parts.append("median_age <= :max_age")
             params["max_age"] = max_age
+        if min_employment_rating is not None:
+            where_parts.append("local_employment_rating IS NOT NULL AND local_employment_rating >= :min_employment_rating")
+            params["min_employment_rating"] = min_employment_rating
         where_sql = " AND ".join(where_parts) if where_parts else "1=1"
 
         # Count with raw SQL (never selects city)
@@ -97,13 +101,17 @@ def get_census_data():
         rows = db.execute(data_sql, params).fetchall()
 
         # Build response dicts (same shape as to_dict)
-        keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "data_year", "created_at", "updated_at"]
-        data = [dict(zip(keys, row)) for row in rows]
-        for row in data:
-            if row.get("created_at"):
-                row["created_at"] = row["created_at"].isoformat() if hasattr(row["created_at"], "isoformat") else str(row["created_at"])
-            if row.get("updated_at"):
-                row["updated_at"] = row["updated_at"].isoformat() if hasattr(row["updated_at"], "isoformat") else str(row["updated_at"]) if row["updated_at"] else None
+        keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
+        data = []
+        for row in rows:
+            d = dict(zip(keys, row))
+            if d.get("local_employment_rating") is not None:
+                d["local_employment_rating"] = float(d["local_employment_rating"])
+            if d.get("created_at"):
+                d["created_at"] = d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"])
+            if d.get("updated_at"):
+                d["updated_at"] = d["updated_at"].isoformat() if hasattr(d["updated_at"], "isoformat") else str(d["updated_at"]) if d["updated_at"] else None
+            data.append(d)
 
         return jsonify({
             "data": data,
@@ -119,9 +127,9 @@ def get_census_data_by_zip(zip_code: str):
     """Get census data for a specific zip code. Fetches from Census API if not in database."""
     db: Session = next(get_db())
     
-    record = db.query(CensusData).options(load_only(*_CENSUS_LOAD_COLUMNS)).filter(CensusData.zip_code == zip_code).first()
+    row = db.execute(text(f"SELECT {_CENSUS_SQL_COLS} FROM census_data WHERE zip_code = :zip LIMIT 1"), {"zip": zip_code}).fetchone()
     
-    if not record:
+    if not row:
         # Try to fetch from Census API
         print(f"[INFO] Zip code {zip_code} not in database, fetching from Census API...")
         try:
@@ -143,7 +151,15 @@ def get_census_data_by_zip(zip_code: str):
             print(f"[ERROR] Failed to fetch census data for zip {zip_code}: {e}")
             return jsonify({'error': f'Failed to fetch census data: {str(e)}'}), 500
     
-    return jsonify(record.to_dict())
+    keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
+    d = dict(zip(keys, row))
+    if d.get("local_employment_rating") is not None:
+        d["local_employment_rating"] = float(d["local_employment_rating"])
+    if d.get("created_at"):
+        d["created_at"] = d["created_at"].isoformat() if hasattr(d["created_at"], "isoformat") else str(d["created_at"])
+    if d.get("updated_at"):
+        d["updated_at"] = d["updated_at"].isoformat() if hasattr(d["updated_at"], "isoformat") else str(d["updated_at"]) if d["updated_at"] else None
+    return jsonify(d)
 
 @api.route('/geocode-zip/<zip_code>', methods=['GET'])
 def geocode_zip(zip_code: str):
@@ -685,7 +701,12 @@ def export_report():
         # Get census data for zip code
         census_record = None
         if zip_code:
-            census_record = db.query(CensusData).options(load_only(*_CENSUS_LOAD_COLUMNS)).filter(CensusData.zip_code == zip_code).first()
+            row = db.execute(text(f"SELECT {_CENSUS_SQL_COLS} FROM census_data WHERE zip_code = :zip LIMIT 1"), {"zip": zip_code}).fetchone()
+            if row:
+                keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
+                census_record = dict(zip(keys, row))
+                if census_record.get("local_employment_rating") is not None:
+                    census_record["local_employment_rating"] = float(census_record["local_employment_rating"])
         
         # STEP 1: Get "zoned" schools = nearest elementary, middle, high in school_data within ~5 miles (no Apify)
         zoned_schools = []
@@ -849,9 +870,10 @@ def export_report():
                 ['Field', 'Value'],
                 ['Address', address],
                 ['Zip Code', zip_code or 'N/A'],
-                ['Population', f"{census_record.population:,}" if census_record and census_record.population else 'N/A'],
-                ['Median Household Income (MHI)', f"${census_record.average_household_income:,.0f}" if census_record and census_record.average_household_income else 'N/A'],
-                ['Median Age', f"{census_record.median_age:.1f} years" if census_record and census_record.median_age else 'N/A']
+                ['Population', f"{census_record['population']:,}" if census_record and census_record.get('population') else 'N/A'],
+                ['Median Household Income (MHI)', f"${census_record['average_household_income']:,.0f}" if census_record and census_record.get('average_household_income') else 'N/A'],
+                ['Median Age', f"{census_record['median_age']:.1f} years" if census_record and census_record.get('median_age') else 'N/A'],
+                ['Local Employment Rating', f"{census_record['local_employment_rating']:.1f} / 10" if census_record and census_record.get('local_employment_rating') is not None else 'N/A']
             ]
             
             demo_table = Table(demo_data, colWidths=[2.5*inch, 4*inch])
@@ -958,9 +980,10 @@ def export_report():
                     ('Field', 'Value'),
                     ('Address', address),
                     ('Zip Code', zip_code or 'N/A'),
-                    ('Population', f"{census_record.population:,}" if census_record and census_record.population else 'N/A'),
-                    ('Median Household Income (MHI)', f"${census_record.average_household_income:,.0f}" if census_record and census_record.average_household_income else 'N/A'),
-                    ('Median Age', f"{census_record.median_age:.1f} years" if census_record and census_record.median_age else 'N/A')
+                    ('Population', f"{census_record['population']:,}" if census_record and census_record.get('population') else 'N/A'),
+                    ('Median Household Income (MHI)', f"${census_record['average_household_income']:,.0f}" if census_record and census_record.get('average_household_income') else 'N/A'),
+                    ('Median Age', f"{census_record['median_age']:.1f} years" if census_record and census_record.get('median_age') else 'N/A'),
+                    ('Local Employment Rating', f"{census_record['local_employment_rating']:.1f} / 10" if census_record and census_record.get('local_employment_rating') is not None else 'N/A')
                 ]
                 
                 demo_table = doc.add_table(rows=6, cols=2)
