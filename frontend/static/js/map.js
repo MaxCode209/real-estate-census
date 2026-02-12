@@ -4,6 +4,7 @@ let markers = [];
 let heatmapLayer = null;
 let zipCodePolygons = []; // Store zip code boundary polygons
 let schoolDistrictPolygons = []; // School district overlay (NCES, for current zip)
+let schoolDistrictLabels = [];   // Number labels for each attendance zone
 let selectedPolygon = null; // Currently selected/highlighted zip code
 let currentData = [];
 let currentLayer = 'population'; // 'population', 'income', 'age'
@@ -845,7 +846,7 @@ function clearPolygons() {
     selectedPolygon = null;
 }
 
-// Clear school district overlay (NCES districts for current zip)
+// Clear school district overlay (NCES districts for current zip) and zone labels
 function clearSchoolDistrictPolygons() {
     schoolDistrictPolygons.forEach(polygon => {
         if (polygon && polygon.setMap) {
@@ -853,6 +854,18 @@ function clearSchoolDistrictPolygons() {
         }
     });
     schoolDistrictPolygons = [];
+    schoolDistrictLabels.forEach(m => {
+        if (m && m.setMap) m.setMap(null);
+    });
+    schoolDistrictLabels = [];
+}
+
+// Compute centroid (bounds center) of a polygon path for label placement
+function pathCentroid(path) {
+    if (!path || path.length === 0) return null;
+    const b = new google.maps.LatLngBounds();
+    path.forEach(p => b.extend(p));
+    return b.getCenter();
 }
 
 // Turn GeoJSON geometry (Polygon/MultiPolygon, WGS84 [lng,lat]) into Google Maps paths
@@ -888,14 +901,21 @@ function getZipForSchoolDistricts() {
     return null;
 }
 
+// Cached by-level data for current zip (so sub-toggle changes don't re-fetch)
+let cachedSchoolZonesByLevel = null;
+let cachedSchoolZonesZip = null;
+
 // Toggle school districts layer: when checked, draw districts for current zip
 function onSchoolDistrictsToggle() {
     const cb = document.getElementById('layer-school-districts');
     if (!cb) return;
+    const sublayerDiv = document.getElementById('school-level-sublayers');
+    if (sublayerDiv) sublayerDiv.style.display = cb.checked ? 'block' : 'none';
     if (cb.checked) {
         const zip = getZipForSchoolDistricts();
         if (!zip) {
             cb.checked = false;
+            if (sublayerDiv) sublayerDiv.style.display = 'none';
             alert('Search for a zip code first (Search Zip or Search Address), then enable School Districts.');
             return;
         }
@@ -903,7 +923,14 @@ function onSchoolDistrictsToggle() {
     } else {
         clearSchoolDistrictPolygons();
         setSchoolDistrictsStatus('');
+        cachedSchoolZonesByLevel = null;
+        cachedSchoolZonesZip = null;
     }
+}
+
+function onSchoolLevelSublayerChange() {
+    if (!cachedSchoolZonesByLevel || !cachedSchoolZonesZip) return;
+    drawSchoolZonesByLevel(cachedSchoolZonesByLevel, cachedSchoolZonesZip);
 }
 
 function setSchoolDistrictsStatus(msg) {
@@ -911,18 +938,18 @@ function setSchoolDistrictsStatus(msg) {
     if (el) el.textContent = msg || '';
 }
 
-// Load and draw school districts for a zip (NCES attendance zones, NC/SC). Requires zip boundary on server.
+// Load and draw school districts for a zip (by level: Elementary, Middle, High). NCES attendance zones, NC/SC.
 async function loadAndDrawSchoolDistricts(zipCode) {
     clearSchoolDistrictPolygons();
     setSchoolDistrictsStatus('');
     if (!zipCode || !/^\d{5}$/.test(zipCode)) return;
-    setSchoolDistrictsStatus('Loading districts…');
+    setSchoolDistrictsStatus('Loading attendance zones…');
     try {
-        let response = await fetch(`${API_BASE_URL}/zips/${zipCode}/school-zones`);
+        let response = await fetch(`${API_BASE_URL}/zips/${zipCode}/school-zones?by_level=1`);
         if (response.status === 404) {
             setSchoolDistrictsStatus('Loading zip boundary…');
             await fetch(`${API_BASE_URL}/zip-boundary/${zipCode}`);
-            response = await fetch(`${API_BASE_URL}/zips/${zipCode}/school-zones`);
+            response = await fetch(`${API_BASE_URL}/zips/${zipCode}/school-zones?by_level=1`);
         }
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -932,61 +959,121 @@ async function loadAndDrawSchoolDistricts(zipCode) {
             return;
         }
         const data = await response.json();
-        const districts = data.districts || [];
-        if (districts.length === 0) {
-            setSchoolDistrictsStatus('No districts for this zip (NC/SC only)');
+        const byLevel = data.by_level && (data.elementary || data.middle || data.high);
+        if (!byLevel) {
+            const msg = data.message || 'No attendance zones for this zip (NC/SC only)';
+            setSchoolDistrictsStatus(msg);
             return;
         }
-        setSchoolDistrictsStatus(`Showing ${districts.length} district(s)`);
-        const bounds = new google.maps.LatLngBounds();
-        let drawnCount = 0;
-        districts.forEach(d => {
-            const geometry = d.geometry;
+        cachedSchoolZonesByLevel = {
+            elementary: data.elementary || [],
+            middle: data.middle || [],
+            high: data.high || []
+        };
+        cachedSchoolZonesZip = zipCode;
+        const total = (cachedSchoolZonesByLevel.elementary.length + cachedSchoolZonesByLevel.middle.length + cachedSchoolZonesByLevel.high.length);
+        setSchoolDistrictsStatus(`Loaded ${total} attendance zone(s) — each contains multiple schools`);
+        drawSchoolZonesByLevel(cachedSchoolZonesByLevel, zipCode);
+    } catch (e) {
+        setSchoolDistrictsStatus('Failed to load zones');
+        console.warn('Failed to load school zones:', e);
+    }
+}
+
+function drawSchoolZonesByLevel(byLevel, zipCode) {
+    clearSchoolDistrictPolygons();
+    const showElem = document.getElementById('layer-school-elementary')?.checked ?? true;
+    const showMid = document.getElementById('layer-school-middle')?.checked ?? true;
+    const showHigh = document.getElementById('layer-school-high')?.checked ?? true;
+    const levels = [];
+    if (showElem) levels.push({ key: 'elementary', arr: byLevel.elementary || [], label: 'Elementary' });
+    if (showMid) levels.push({ key: 'middle', arr: byLevel.middle || [], label: 'Middle' });
+    if (showHigh) levels.push({ key: 'high', arr: byLevel.high || [], label: 'High' });
+    const bounds = new google.maps.LatLngBounds();
+    let drawnCount = 0;
+    let activeSchoolZoneInfo = null;
+    function showZonePopup(zoneData, anchorPosition) {
+        if (activeSchoolZoneInfo) activeSchoolZoneInfo.close();
+        const { z, zoneNum, label } = zoneData;
+        const district = z.district_name ? `District: ${z.district_name}` : '';
+        const blendedLine = z.avg_rating != null
+            ? `<br/><strong>Blended average: ${z.avg_rating}/10</strong> <span style="color:#666;font-size:0.9em;">(Great Schools)</span>`
+            : '';
+        const schools = z.schools || [];
+        const schoolsList = schools.length > 0
+            ? schools.map(s => `• ${(s.name || 'Unknown')}${s.rating != null ? ` — <strong>${s.rating}/10</strong> Great Schools` : ' — rating N/A'}`).join('<br/>')
+            : '<em>No school data for this zone</em>';
+        const content = `<div style="padding:12px;min-width:280px;max-width:340px;font-family:sans-serif;">
+            <strong style="font-size:1.05em;">Attendance Zone #${zoneNum}</strong> <span style="color:#666;">(${label})</span><br/>
+            ${district}${blendedLine}
+            <br/><br/>
+            <strong>Schools in this zone:</strong><br/>
+            <div style="margin-top:6px;line-height:1.5;">${schoolsList}</div>
+        </div>`;
+        activeSchoolZoneInfo = new google.maps.InfoWindow({ content });
+        activeSchoolZoneInfo.setPosition(anchorPosition);
+        activeSchoolZoneInfo.open(map);
+        activeSchoolZoneInfo.addListener('closeclick', () => { activeSchoolZoneInfo = null; });
+        setTimeout(() => {
+            if (activeSchoolZoneInfo) { activeSchoolZoneInfo.close(); activeSchoolZoneInfo = null; }
+        }, 12000);
+    }
+
+    levels.forEach(({ arr, label }) => {
+        arr.forEach((z, zoneIdx) => {
+            const zoneNum = zoneIdx + 1;
+            const geometry = z.geometry;
             if (!geometry) return;
             const paths = geometryToPaths(geometry);
+            const zoneData = { z, zoneNum, label };
             paths.forEach(path => {
                 if (path.length < 3) return;
                 path.forEach(ll => bounds.extend(ll));
+                const color = z.color || '#666666';
                 const polygon = new google.maps.Polygon({
                     paths: path,
                     map: map,
-                    strokeColor: d.color || '#4A90D9',
-                    strokeOpacity: 0.9,
-                    strokeWeight: 2,
-                    fillColor: d.color || '#4A90D9',
-                    fillOpacity: 0.25,
+                    strokeColor: '#1a1a1a',
+                    strokeOpacity: 1,
+                    strokeWeight: 3,
+                    fillColor: color,
+                    fillOpacity: 0.18,
                     clickable: true,
                     zIndex: 3
                 });
-                polygon.districtName = d.district_name;
-                polygon.districtSchools = d.schools;
-                polygon.avgRating = d.avg_rating;
-                polygon.addListener('click', () => {
-                    const name = d.district_name || 'District';
-                    const rating = d.avg_rating != null ? `Avg rating: ${d.avg_rating}/10` : 'No ratings';
-                    const schoolsList = (d.schools || []).map(s => `• ${s.name} (${s.level})`).join('<br/>');
-                    const content = `<div style="padding:8px;min-width:200px;"><strong>${name}</strong><br/>${rating}<br/><br/>${schoolsList || 'No schools'}</div>`;
-                    const info = new google.maps.InfoWindow({ content });
-                    info.setPosition(path[0]);
-                    info.open(map);
-                    setTimeout(() => info.close(), 8000);
-                });
+                polygon.addListener('click', () => showZonePopup(zoneData, path[0]));
                 schoolDistrictPolygons.push(polygon);
+                const center = pathCentroid(path);
+                if (center) {
+                    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><circle cx="14" cy="14" r="12" fill="white" stroke="#1a1a1a" stroke-width="2"/><text x="14" y="18" text-anchor="middle" font-size="12" font-weight="bold" fill="#1a1a1a">${zoneNum}</text></svg>`;
+                    const labelMarker = new google.maps.Marker({
+                        position: center,
+                        map: map,
+                        icon: {
+                            url: 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg),
+                            scaledSize: new google.maps.Size(28, 28),
+                            anchor: new google.maps.Point(14, 14)
+                        },
+                        zIndex: 4,
+                        clickable: true,
+                        cursor: 'pointer'
+                    });
+                    labelMarker.addListener('click', () => showZonePopup(zoneData, center));
+                    schoolDistrictLabels.push(labelMarker);
+                }
                 drawnCount++;
             });
         });
-        if (drawnCount > 0 && !bounds.isEmpty()) {
-            map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
-        }
-        if (drawnCount === 0) {
-            setSchoolDistrictsStatus('No geometry to draw (check console)');
-            console.warn('School districts: geometry returned but no paths drawn', districts.map(d => ({ type: d.geometry?.type, hasCoords: !!d.geometry?.coordinates })));
-        }
-        console.log(`Drew ${drawnCount} polygon(s) for ${districts.length} district(s), zip ${zipCode}`);
-    } catch (e) {
-        setSchoolDistrictsStatus('Failed to load districts');
-        console.warn('Failed to load school zones:', e);
+    });
+    if (drawnCount > 0 && !bounds.isEmpty()) {
+        map.fitBounds(bounds, { top: 60, right: 60, bottom: 60, left: 60 });
     }
+    if (drawnCount === 0) {
+        setSchoolDistrictsStatus('No levels selected — check Elementary, Middle, or High');
+    } else {
+        setSchoolDistrictsStatus(`Showing ${drawnCount} attendance zone(s) — numbers mark each boundary`);
+    }
+    console.log(`Drew ${drawnCount} school zone polygon(s) for zip ${zipCode}`);
 }
 
 // Clear all markers
@@ -1048,6 +1135,10 @@ function doInit() {
     document.getElementById('layer-boundaries').addEventListener('change', updateMap);
     const schoolDistrictsEl = document.getElementById('layer-school-districts');
     if (schoolDistrictsEl) schoolDistrictsEl.addEventListener('change', onSchoolDistrictsToggle);
+    ['layer-school-elementary', 'layer-school-middle', 'layer-school-high'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', onSchoolLevelSublayerChange);
+    });
     
     // Search by city
     document.getElementById('apply-filters-btn').addEventListener('click', applyDataLayerFilters);

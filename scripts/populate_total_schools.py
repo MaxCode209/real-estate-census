@@ -5,13 +5,17 @@ Columns: total_schools, elementary_schools, middle_schools, high_schools,
          average_school_rating, elementary_school_rating, middle_school_rating, high_school_rating, top_school_rating.
 
 Uses school_data: each row has lat/lng, school names, and ratings (1-10).
-Assigns each unique school (by name + level) to the zip with nearest centroid.
+Assigns each unique school (by name + level) to a zip using (best to fallback):
+  1. Zip parsed from school address (elementary_school_address etc.)
+  2. Row's zip_code (from populate_school_addresses.py reverse geocode)
+  3. Nearest zip centroid
 
 Usage:
     python scripts/populate_total_schools.py
     python scripts/populate_total_schools.py --dry-run
 """
 import os
+import re
 import sys
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple
@@ -24,6 +28,14 @@ if PROJECT_ROOT not in sys.path:
 from sqlalchemy import text
 
 from backend.database import SessionLocal
+
+
+def parse_zip_from_address(addr: str) -> Optional[str]:
+    """Extract 5-digit US zip from address string."""
+    if not addr or not str(addr).strip():
+        return None
+    m = re.search(r"\b(\d{5})(?:-\d{4})?\b", str(addr))
+    return m.group(1) if m else None
 
 
 def haversine_approx(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -69,26 +81,28 @@ def main() -> None:
         centroids = [(r[0], float(r[1]), float(r[2])) for r in rows]
         print(f"Loaded {len(centroids)} zip centroids")
 
-        # 2. Load school_data: unique (name, level) with first-seen lat/lng and rating
+        # 2. Load school_data: unique (name, level) with lat/lng, rating, row zip, school address
         school_sql = """
-            SELECT id, latitude, longitude,
-                   elementary_school_name, elementary_school_rating,
-                   middle_school_name, middle_school_rating,
-                   high_school_name, high_school_rating
+            SELECT id, latitude, longitude, zip_code,
+                   elementary_school_name, elementary_school_rating, elementary_school_address,
+                   middle_school_name, middle_school_rating, middle_school_address,
+                   high_school_name, high_school_rating, high_school_address
             FROM school_data
             WHERE latitude IS NOT NULL AND longitude IS NOT NULL
               AND (elementary_school_name IS NOT NULL OR middle_school_name IS NOT NULL OR high_school_name IS NOT NULL)
         """
         rows = db.execute(text(school_sql)).fetchall()
 
-        # For each unique (name, level), keep first (lat, lng, rating) we see
-        school_to_data: Dict[Tuple[str, str], Tuple[float, float, float]] = {}
+        # For each unique (name, level), keep first (lat, lng, rating, row_zip, school_addr) we see
+        # school_addr is used to parse zip when available
+        school_to_data: Dict[Tuple[str, str], Tuple[float, float, float, Optional[str], Optional[str]]] = {}
         for row in rows:
             lat_f, lng_f = float(row[1]), float(row[2])
-            for name, rating, level in [
-                (row[3], row[4], "elementary"),
-                (row[5], row[6], "middle"),
-                (row[7], row[8], "high"),
+            row_zip = str(row[3]).strip() if row[3] else None
+            for name, rating, school_addr, level in [
+                (row[4], row[5], row[6], "elementary"),
+                (row[7], row[8], row[9], "middle"),
+                (row[10], row[11], row[12], "high"),
             ]:
                 if name and (n := str(name).strip()) and rating is not None:
                     try:
@@ -96,21 +110,31 @@ def main() -> None:
                         if 0 <= r <= 10:
                             key = (n, level)
                             if key not in school_to_data:
-                                school_to_data[key] = (lat_f, lng_f, r)
+                                addr = str(school_addr).strip() if school_addr else None
+                                school_to_data[key] = (lat_f, lng_f, r, row_zip, addr)
                     except (TypeError, ValueError):
                         pass
 
         print(f"Found {len(school_to_data)} unique schools with ratings")
 
-        # 3. Assign each school to nearest zip; count and collect ratings per zip by level
+        def resolve_zip(lat: float, lng: float, row_zip: Optional[str], school_addr: Optional[str]) -> Optional[str]:
+            """Best zip: from school address > row zip > nearest centroid."""
+            z = parse_zip_from_address(school_addr) if school_addr else None
+            if z:
+                return z
+            if row_zip and len(row_zip) >= 5:
+                return row_zip[:5] if row_zip else None
+            return nearest_zip(lat, lng, centroids)
+
+        # 3. Assign each school to zip; count and collect ratings per zip by level
         zip_elem: Dict[str, Set[str]] = defaultdict(set)
         zip_mid: Dict[str, Set[str]] = defaultdict(set)
         zip_high: Dict[str, Set[str]] = defaultdict(set)
         zip_elem_ratings: Dict[str, List[float]] = defaultdict(list)
         zip_mid_ratings: Dict[str, List[float]] = defaultdict(list)
         zip_high_ratings: Dict[str, List[float]] = defaultdict(list)
-        for (school_name, level), (lat, lng, rating) in school_to_data.items():
-            z = nearest_zip(lat, lng, centroids)
+        for (school_name, level), (lat, lng, rating, row_zip, school_addr) in school_to_data.items():
+            z = resolve_zip(lat, lng, row_zip, school_addr)
             if z:
                 if level == "elementary":
                     zip_elem[z].add(school_name)

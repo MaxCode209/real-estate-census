@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session, load_only
 from sqlalchemy import or_, text
 from typing import List, Dict, Optional
 from backend.database import get_db
-from backend.models import CensusData, SchoolData, AttendanceZone
+from backend.models import CensusData, SchoolData, School, AttendanceZone
 
 # Columns that exist in census_data table (no city until added in Supabase)
 _CENSUS_LOAD_COLUMNS = (
@@ -24,6 +24,7 @@ from backend.zone_utils import (
     zones_intersecting_zip_diagnostic,
     group_zones_by_district,
     district_geometry_in_zip,
+    zone_geometry_in_zip,
 )
 from backend.greatschools_client import GreatSchoolsClient
 
@@ -1397,6 +1398,58 @@ def get_school_zones_by_zip(zip_code: str):
                 'debug': diag,
             })
 
+        by_level = request.args.get('by_level', '').lower() in ('1', 'true', 'yes')
+        if by_level:
+            by_level_out = {'elementary': [], 'middle': [], 'high': []}
+            LEVEL_COLORS = {'elementary': '#2E7D32', 'middle': '#1565C0', 'high': '#C62828'}
+            def _norm_level(s):
+                s = (s or 'unknown').lower()
+                if 'elem' in s or s == 'elementary': return 'elementary'
+                if 'mid' in s or s == 'middle': return 'middle'
+                if 'high' in s: return 'high'
+                return s
+            for level_key in ('elementary', 'middle', 'high'):
+                level_zones = [z for z in intersecting if _norm_level(z.get('school_level')) == level_key]
+                grouped = group_zones_by_district(level_zones)
+                for grp in grouped:
+                    district_zones = grp['zones']
+                    geometry = district_geometry_in_zip(zip_polygon, district_zones)
+                    if geometry is None:
+                        continue
+                    schools = []
+                    ratings = []
+                    for z in district_zones:
+                        name = z.get('school_name') or 'Unknown'
+                        rating = None
+                        if z.get('canonical_school_id'):
+                            school = db.query(School).filter(School.id == z['canonical_school_id']).first()
+                            if school:
+                                rating = school.rating
+                        if rating is None:
+                            rating = _rating_for_school(db, name, level_key)
+                        schools.append({
+                            'name': name,
+                            'rating': round(rating, 1) if rating is not None else None,
+                        })
+                        if rating is not None:
+                            ratings.append(rating)
+                    avg_rating = sum(ratings) / len(ratings) if ratings else None
+                    by_level_out[level_key].append({
+                        'district_id': grp['district_id'],
+                        'district_name': grp['district_name'],
+                        'geometry': geometry,
+                        'schools': schools,
+                        'avg_rating': round(avg_rating, 1) if avg_rating is not None else None,
+                        'color': LEVEL_COLORS.get(level_key, '#666666'),
+                    })
+            return jsonify({
+                'zip_code': zip_code,
+                'by_level': True,
+                'elementary': by_level_out['elementary'],
+                'middle': by_level_out['middle'],
+                'high': by_level_out['high'],
+            })
+
         grouped = group_zones_by_district(intersecting)
         DISTRICT_COLORS = ['#4A90D9', '#50C878', '#E6A23C', '#E07070', '#9B59B6', '#1ABC9C', '#E67E22', '#3498DB']
 
@@ -1439,21 +1492,61 @@ def get_school_zones_by_zip(zip_code: str):
 
 @api.route('/schools/zip/<zip_code>', methods=['GET'])
 def get_schools_by_zip(zip_code: str):
-    """Get school ratings for a zip code."""
+    """Get school ratings summary for a zip code (single row if cached)."""
     try:
         db: Session = next(get_db())
-        
+
         # Check if we have cached data
         cached = db.query(SchoolData).filter(SchoolData.zip_code == zip_code).first()
         if cached:
             return jsonify(cached.to_dict())
-        
+
         # If not cached, we need an address to geocode
-        # For now, return error suggesting to use address endpoint
         return jsonify({
             'error': 'School data not found for this zip code',
             'message': 'Please use /api/schools/address?address=<full_address> to fetch school data'
         }), 404
-        
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@api.route('/schools/zip/<zip_code>/list', methods=['GET'])
+def list_schools_by_zip(zip_code: str):
+    """List unique schools in a zip code for plotting on map. Returns name, level, address, lat, lng, rating."""
+    try:
+        db: Session = next(get_db())
+        rows = db.execute(text("""
+            SELECT DISTINCT ON (LOWER(TRIM(name)), level)
+                   name, level, address, latitude, longitude, rating
+            FROM (
+                SELECT elementary_school_name AS name, 'elementary' AS level,
+                       COALESCE(elementary_school_address, address) AS address,
+                       latitude, longitude, elementary_school_rating AS rating
+                FROM school_data
+                WHERE zip_code = :zip AND elementary_school_name IS NOT NULL AND elementary_school_rating IS NOT NULL
+                UNION ALL
+                SELECT middle_school_name, 'middle',
+                       COALESCE(middle_school_address, address),
+                       latitude, longitude, middle_school_rating
+                FROM school_data
+                WHERE zip_code = :zip AND middle_school_name IS NOT NULL AND middle_school_rating IS NOT NULL
+                UNION ALL
+                SELECT high_school_name, 'high',
+                       COALESCE(high_school_address, address),
+                       latitude, longitude, high_school_rating
+                FROM school_data
+                WHERE zip_code = :zip AND high_school_name IS NOT NULL AND high_school_rating IS NOT NULL
+            ) sub
+            WHERE name IS NOT NULL
+            ORDER BY LOWER(TRIM(name)), level, rating DESC
+        """), {"zip": zip_code}).fetchall()
+
+        schools = [
+            {"name": r[0], "level": r[1], "address": r[2], "latitude": r[3], "longitude": r[4], "rating": float(r[5]) if r[5] else None}
+            for r in rows
+        ]
+        return jsonify({"zip_code": zip_code, "schools": schools})
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500

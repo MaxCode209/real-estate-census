@@ -49,6 +49,46 @@ class CensusData(Base):
         }
 
 
+class School(Base):
+    """Canonical school record: one per unique (name, level) with address, lat/lng, rating."""
+
+    __tablename__ = 'schools'
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    level = Column(String(50), nullable=False, index=True)  # 'elementary', 'middle', 'high'
+    address = Column(String(500), nullable=True)
+    city = Column(String(100), nullable=True)
+    state = Column(String(2), nullable=True)
+    zip_code = Column(String(10), nullable=True, index=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
+    rating = Column(Float, nullable=True)
+    nces_id = Column(String(20), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    __table_args__ = (
+        Index('idx_schools_name_level', 'name', 'level'),
+        Index('idx_schools_zip', 'zip_code'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'level': self.level,
+            'address': self.address,
+            'city': self.city,
+            'state': self.state,
+            'zip_code': self.zip_code,
+            'latitude': self.latitude,
+            'longitude': self.longitude,
+            'rating': self.rating,
+            'nces_id': self.nces_id,
+        }
+
+
 class SchoolData(Base):
     """Model for storing school ratings data by address/zip code."""
     
@@ -118,6 +158,7 @@ class AttendanceZone(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     school_id = Column(Integer, ForeignKey('school_data.id'), nullable=True, index=True)
+    canonical_school_id = Column(Integer, ForeignKey('schools.id'), nullable=True, index=True)  # Link to schools table
     
     # School identification
     school_name = Column(String(255), nullable=False, index=True)
@@ -147,6 +188,7 @@ class AttendanceZone(Base):
         return {
             'id': self.id,
             'school_id': self.school_id,
+            'canonical_school_id': self.canonical_school_id,
             'school_name': self.school_name,
             'school_level': self.school_level,
             'school_district': self.school_district,

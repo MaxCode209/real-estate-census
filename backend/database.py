@@ -35,6 +35,6 @@ def get_db():
 
 def init_db():
     """Initialize database tables."""
-    from backend.models import CensusData, SchoolData, AttendanceZone
+    from backend.models import CensusData, SchoolData, School, AttendanceZone
     Base.metadata.create_all(bind=engine)
 

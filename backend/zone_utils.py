@@ -371,6 +371,20 @@ def group_zones_by_district(zones: List[Dict]) -> List[Dict]:
     ]
 
 
+def zone_geometry_in_zip(zip_polygon: Any, zone: Dict) -> Optional[Dict]:
+    """Clip a single zone to the zip polygon. Returns GeoJSON geometry or None."""
+    geom = _boundary_to_shapely_wgs84(zone)
+    if geom is None:
+        return None
+    try:
+        inter = zip_polygon.intersection(geom)
+        if inter.is_empty:
+            return None
+        return mapping(inter)
+    except Exception:
+        return None
+
+
 def district_geometry_in_zip(zip_polygon: Any, district_zones: List[Dict]) -> Optional[Dict]:
     """
     Compute the part of the zip that lies in this district (intersection of zip with each zone, unioned).
