@@ -56,6 +56,8 @@ async function loadCensusData(filters = {}) {
         if (filters.min_age != null && filters.min_age !== '') params.append('min_age', filters.min_age);
         if (filters.max_age != null && filters.max_age !== '') params.append('max_age', filters.max_age);
         if (filters.min_employment_rating != null && filters.min_employment_rating !== '' && !Number.isNaN(Number(filters.min_employment_rating))) params.append('min_employment_rating', filters.min_employment_rating);
+        if (filters.min_elementary_school_rating != null && filters.min_elementary_school_rating !== '' && !Number.isNaN(Number(filters.min_elementary_school_rating))) params.append('min_elementary_school_rating', filters.min_elementary_school_rating);
+        if (filters.min_blended_school_rating != null && filters.min_blended_school_rating !== '' && !Number.isNaN(Number(filters.min_blended_school_rating))) params.append('min_blended_school_rating', filters.min_blended_school_rating);
         params.append('limit', '5000'); // Adjust as needed
         
         const response = await fetch(`${API_BASE_URL}/census-data?${params}`);
@@ -82,12 +84,14 @@ async function loadCensusData(filters = {}) {
     }
 }
 
-// Apply data layer filters (population min, MHI min, employment rating min)
+// Apply data layer filters (population min, MHI min, employment rating min, school scores)
 function applyDataLayerFilters() {
     const filters = { ...currentFilters };
     const popVal = document.getElementById('filter-pop-min')?.value?.trim();
     const mhiVal = document.getElementById('filter-mhi-min')?.value?.trim();
     const empVal = document.getElementById('filter-emp-min')?.value?.trim();
+    const elemVal = document.getElementById('filter-elem-score-min')?.value?.trim();
+    const blendedVal = document.getElementById('filter-blended-score-min')?.value?.trim();
     if (popVal) filters.min_population = parseInt(popVal, 10);
     if (mhiVal) filters.min_income = parseFloat(mhiVal);
     if (empVal) {
@@ -95,6 +99,14 @@ function applyDataLayerFilters() {
         if (!Number.isNaN(empNum) && empNum >= 0 && empNum <= 10) {
             filters.min_employment_rating = empNum;
         }
+    }
+    if (elemVal) {
+        const n = parseFloat(elemVal);
+        if (!Number.isNaN(n) && n >= 0 && n <= 10) filters.min_elementary_school_rating = n;
+    }
+    if (blendedVal) {
+        const n = parseFloat(blendedVal);
+        if (!Number.isNaN(n) && n >= 0 && n <= 10) filters.min_blended_school_rating = n;
     }
     loadCensusData(filters);
 }
@@ -104,9 +116,13 @@ function clearDataLayerFilters() {
     const popEl = document.getElementById('filter-pop-min');
     const mhiEl = document.getElementById('filter-mhi-min');
     const empEl = document.getElementById('filter-emp-min');
+    const elemEl = document.getElementById('filter-elem-score-min');
+    const blendedEl = document.getElementById('filter-blended-score-min');
     if (popEl) popEl.value = '';
     if (mhiEl) mhiEl.value = '';
     if (empEl) empEl.value = '';
+    if (elemEl) elemEl.value = '';
+    if (blendedEl) blendedEl.value = '';
     const filters = {};
     if (currentFilters.city) filters.city = currentFilters.city;
     if (currentFilters.state) filters.state = currentFilters.state;

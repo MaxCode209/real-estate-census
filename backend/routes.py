@@ -53,6 +53,8 @@ def get_census_data():
         min_age = request.args.get('min_age', type=float)
         max_age = request.args.get('max_age', type=float)
         min_employment_rating = request.args.get('min_employment_rating', type=float)
+        min_elementary_school_rating = request.args.get('min_elementary_school_rating', type=float)
+        min_blended_school_rating = request.args.get('min_blended_school_rating', type=float)
         limit = request.args.get('limit', type=int, default=1000)
         offset = request.args.get('offset', type=int, default=0)
 
@@ -92,6 +94,12 @@ def get_census_data():
         if min_employment_rating is not None:
             where_parts.append("local_employment_rating IS NOT NULL AND local_employment_rating >= :min_employment_rating")
             params["min_employment_rating"] = min_employment_rating
+        if min_elementary_school_rating is not None:
+            where_parts.append("average_elementary_school_rating IS NOT NULL AND average_elementary_school_rating >= :min_elementary_school_rating")
+            params["min_elementary_school_rating"] = min_elementary_school_rating
+        if min_blended_school_rating is not None:
+            where_parts.append("average_school_rating IS NOT NULL AND average_school_rating >= :min_blended_school_rating")
+            params["min_blended_school_rating"] = min_blended_school_rating
         where_sql = " AND ".join(where_parts) if where_parts else "1=1"
 
         from_clause = "census_data"
