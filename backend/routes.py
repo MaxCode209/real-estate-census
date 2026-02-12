@@ -12,8 +12,8 @@ _CENSUS_LOAD_COLUMNS = (
     CensusData.population, CensusData.median_age, CensusData.average_household_income,
     CensusData.data_year, CensusData.created_at, CensusData.updated_at,
 )
-# Explicit column list for raw SQL (never includes city)
-_CENSUS_SQL_COLS = "id, zip_code, county, population, median_age, average_household_income, local_employment_rating, data_year, created_at, updated_at"
+# Explicit column list for raw SQL (includes school counts and ratings)
+_CENSUS_SQL_COLS = "id, zip_code, county, population, median_age, average_household_income, local_employment_rating, data_year, created_at, updated_at, total_schools, elementary_schools, middle_schools, high_schools, average_school_rating, average_elementary_school_rating, average_middle_school_rating, average_high_school_rating"
 from backend.census_api import CensusAPIClient
 from backend.zone_utils import (
     point_in_polygon,
@@ -45,6 +45,7 @@ def get_census_data():
     try:
         zip_code = request.args.get('zip_code')
         city = request.args.get('city')
+        state = request.args.get('state')  # Optional: e.g. "NC" to disambiguate Wilmington
         min_income = request.args.get('min_income', type=float)
         max_income = request.args.get('max_income', type=float)
         min_population = request.args.get('min_population', type=int)
@@ -55,7 +56,10 @@ def get_census_data():
         limit = request.args.get('limit', type=int, default=1000)
         offset = request.args.get('offset', type=int, default=0)
 
-        # Build WHERE and params
+        # Build WHERE and params (state filter uses census_data.state when column exists)
+        use_state_filter = state and str(state).strip()
+        t = ""  # No table alias
+
         where_parts = []
         params = {}
         if zip_code:
@@ -64,6 +68,9 @@ def get_census_data():
         if city:
             where_parts.append("LOWER(TRIM(COALESCE(city, ''))) = LOWER(TRIM(:city))")
             params["city"] = city.strip()
+        if use_state_filter:
+            where_parts.append("UPPER(TRIM(COALESCE(state, ''))) = UPPER(TRIM(:state))")
+            params["state"] = str(state).strip()
         if min_income:
             where_parts.append("average_household_income >= :min_income")
             params["min_income"] = min_income
@@ -87,21 +94,25 @@ def get_census_data():
             params["min_employment_rating"] = min_employment_rating
         where_sql = " AND ".join(where_parts) if where_parts else "1=1"
 
-        # Count with raw SQL (never selects city)
-        count_sql = text(f"SELECT COUNT(*) FROM census_data WHERE {where_sql}")
+        from_clause = "census_data"
+        col_list = _CENSUS_SQL_COLS
+        keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at", "total_schools", "elementary_schools", "middle_schools", "high_schools", "average_school_rating", "average_elementary_school_rating", "average_middle_school_rating", "average_high_school_rating"]
+
+        # Count with raw SQL
+        count_sql = text(f"SELECT COUNT(*) FROM {from_clause} WHERE {where_sql}")
         total = db.execute(count_sql, params).scalar()
 
-        # Data with raw SQL (only columns that exist)
+        # Data with raw SQL
+        order_col = "zip_code"
         data_sql = text(
-            f"SELECT {_CENSUS_SQL_COLS} FROM census_data WHERE {where_sql} "
-            "ORDER BY zip_code LIMIT :lim OFFSET :off"
+            f"SELECT {col_list} FROM {from_clause} WHERE {where_sql} "
+            f"ORDER BY {order_col} LIMIT :lim OFFSET :off"
         )
         params["lim"] = limit
         params["off"] = offset
         rows = db.execute(data_sql, params).fetchall()
 
         # Build response dicts (same shape as to_dict)
-        keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
         data = []
         for row in rows:
             d = dict(zip(keys, row))
@@ -151,7 +162,7 @@ def get_census_data_by_zip(zip_code: str):
             print(f"[ERROR] Failed to fetch census data for zip {zip_code}: {e}")
             return jsonify({'error': f'Failed to fetch census data: {str(e)}'}), 500
     
-    keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
+    keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at", "total_schools", "elementary_schools", "middle_schools", "high_schools", "average_school_rating", "average_elementary_school_rating", "average_middle_school_rating", "average_high_school_rating"]
     d = dict(zip(keys, row))
     if d.get("local_employment_rating") is not None:
         d["local_employment_rating"] = float(d["local_employment_rating"])
@@ -703,7 +714,7 @@ def export_report():
         if zip_code:
             row = db.execute(text(f"SELECT {_CENSUS_SQL_COLS} FROM census_data WHERE zip_code = :zip LIMIT 1"), {"zip": zip_code}).fetchone()
             if row:
-                keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at"]
+                keys = ["id", "zip_code", "county", "population", "median_age", "average_household_income", "local_employment_rating", "data_year", "created_at", "updated_at", "total_schools", "elementary_schools", "middle_schools", "high_schools", "average_school_rating", "average_elementary_school_rating", "average_middle_school_rating", "average_high_school_rating"]
                 census_record = dict(zip(keys, row))
                 if census_record.get("local_employment_rating") is not None:
                     census_record["local_employment_rating"] = float(census_record["local_employment_rating"])

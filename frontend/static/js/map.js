@@ -48,6 +48,7 @@ async function loadCensusData(filters = {}) {
         const params = new URLSearchParams();
         if (filters.zip_code) params.append('zip_code', filters.zip_code);
         if (filters.city) params.append('city', filters.city);
+        if (filters.state) params.append('state', filters.state);
         if (filters.min_income) params.append('min_income', filters.min_income);
         if (filters.max_income) params.append('max_income', filters.max_income);
         if (filters.min_population) params.append('min_population', filters.min_population);
@@ -108,6 +109,7 @@ function clearDataLayerFilters() {
     if (empEl) empEl.value = '';
     const filters = {};
     if (currentFilters.city) filters.city = currentFilters.city;
+    if (currentFilters.state) filters.state = currentFilters.state;
     if (currentFilters.zip_code) filters.zip_code = currentFilters.zip_code;
     loadCensusData(filters);
 }
@@ -171,7 +173,7 @@ async function updateMap() {
     // Update heatmap if we have data
     if (heatmapData.length > 0) {
         updateHeatmap(heatmapData, activeLayer);
-        // Zoom for non-city views (city zoom is done in searchByCity via geocode)
+        // Zoom for non-city views (city zoom is done in searchByCity)
         if (currentData.length > 1 && !currentFilters.city) {
             map.fitBounds(bounds);
         }
@@ -363,6 +365,21 @@ function createInfoWindowContent(record) {
             </div>
         `;
     }
+    const tot = record.total_schools != null ? record.total_schools : 'N/A';
+    const elem = record.elementary_schools != null ? record.elementary_schools : 'N/A';
+    const mid = record.middle_schools != null ? record.middle_schools : 'N/A';
+    const high = record.high_schools != null ? record.high_schools : 'N/A';
+    const fmt = (v) => (v != null && typeof v === 'number') ? v.toFixed(1) : 'N/A';
+    const avgElem = fmt(record.average_elementary_school_rating);
+    const avgMid = fmt(record.average_middle_school_rating);
+    const avgHigh = fmt(record.average_high_school_rating);
+    const blended = fmt(record.average_school_rating);
+    const schoolLine = (tot !== 'N/A' || elem !== 'N/A' || mid !== 'N/A' || high !== 'N/A')
+        ? `<p style="margin: 5px 0;"><strong>Schools:</strong> ${tot} total (Elem: ${elem}, Mid: ${mid}, High: ${high})</p>`
+        : '';
+    const ratingsLine = (avgElem !== 'N/A' || avgMid !== 'N/A' || avgHigh !== 'N/A' || blended !== 'N/A')
+        ? `<p style="margin: 5px 0;"><strong>Avg Ratings (1-10):</strong> Elem ${avgElem} | Mid ${avgMid} | High ${avgHigh} | Blended ${blended}</p>`
+        : '';
     return `
         <div style="padding: 10px; min-width: 200px;">
             <h3 style="margin: 0 0 10px 0;">Zip Code: ${record.zip_code || 'N/A'}</h3>
@@ -370,6 +387,8 @@ function createInfoWindowContent(record) {
             <p style="margin: 5px 0;"><strong>Median Age:</strong> ${record.median_age ? record.median_age.toFixed(1) : 'N/A'}</p>
             <p style="margin: 5px 0;"><strong>Median Household Income (MHI):</strong> ${record.average_household_income ? formatCurrency(record.average_household_income) : 'N/A'}</p>
             <p style="margin: 5px 0;"><strong>Local Employment Rating:</strong> ${record.local_employment_rating != null ? (record.local_employment_rating + ' / 10') : 'N/A'}</p>
+            ${schoolLine}
+            ${ratingsLine}
         </div>
     `;
 }
@@ -1143,15 +1162,29 @@ if (document.readyState === 'loading') {
     runWhenReady();
 }
 
-// Search by city - filter map to show only zip codes in that city
+// Parse "Wilmington NC" or "Wilmington, NC" into { city, state }
+function parseCityState(input) {
+    const s = (input || '').trim();
+    if (!s) return { city: '', state: null };
+    // Match trailing ", XX" or " XX" where XX is 2-letter state code
+    const match = s.match(/^(.+?)(?:,?\s+([A-Za-z]{2}))\s*$/);
+    if (match) {
+        return { city: match[1].trim(), state: match[2].toUpperCase() };
+    }
+    return { city: s, state: null };
+}
+
+// Search by city (and optional state, e.g. "Wilmington NC")
 async function searchByCity() {
     const cityInput = document.getElementById('search-city');
-    const city = cityInput && cityInput.value.trim();
+    const raw = cityInput && cityInput.value.trim();
     
-    if (!city) {
-        alert('Please enter a city name');
+    if (!raw) {
+        alert('Please enter a city name (e.g. Charlotte or Wilmington NC)');
         return;
     }
+
+    const { city, state } = parseCityState(raw);
     
     try {
         showLoading(true);
@@ -1160,20 +1193,25 @@ async function searchByCity() {
         currentAddress = null;
         currentLocation = null;
         updateLegend();
-        // Clear zip and address fields - city search is separate from Search & Zoom
+        // Clear zip and address fields
         const zipEl = document.getElementById('search-zip');
         const addrEl = document.getElementById('search-address');
         if (zipEl) zipEl.value = '';
         if (addrEl) addrEl.value = '';
-        // Auto-enable zip boundaries so city zips are highlighted
+        // Auto-enable zip boundaries
         const boundariesCb = document.getElementById('layer-boundaries');
         if (boundariesCb) boundariesCb.checked = true;
-        await loadCensusData({ city: city });
-        // Zoom to city using geocode (like address search) - avoids wrong center when multiple cities share the name
+
+        const filters = { city };
+        if (state) filters.state = state;
+        await loadCensusData(filters);
+
+        // Zoom to city using geocode
+        const geocodeAddr = state ? `${city}, ${state}, USA` : `${city}, USA`;
         const geocoder = new google.maps.Geocoder();
         const geocodeResult = await new Promise((resolve) => {
             geocoder.geocode(
-                { address: `${city}, USA`, componentRestrictions: { country: 'US' } },
+                { address: geocodeAddr, componentRestrictions: { country: 'US' } },
                 (results, status) => {
                     if (status === 'OK' && results && results.length > 0) resolve(results[0]);
                     else resolve(null);
